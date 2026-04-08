@@ -38,7 +38,7 @@ function normalizeMaxInlineDiffBytes(value) {
 
 function measureGitOutputBytes(cwd, args, maxBytes) {
   const result = git(cwd, args, { maxBuffer: maxBytes + 1 });
-  if (result.error?.code === "ENOBUFS") {
+  if (result.error && /** @type {NodeJS.ErrnoException} */ (result.error).code === "ENOBUFS") {
     return maxBytes + 1;
   }
   if (result.error) {
