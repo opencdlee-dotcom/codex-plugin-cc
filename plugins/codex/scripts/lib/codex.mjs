@@ -837,8 +837,8 @@ export async function getCodexAuthStatus(cwd, options = {}) {
   let client = null;
   try {
     client = await CodexAppServerClient.connect(cwd, {
-      disableBroker: true,
-      env: options.env
+      env: options.env,
+      reuseExistingBroker: true
     });
     return await getCodexAuthStatusFromClient(client, cwd);
   } catch (error) {
@@ -874,12 +874,9 @@ export async function interruptAppServerTurn(cwd, { threadId, turnId }) {
     };
   }
 
-  const brokerEndpoint = process.env[BROKER_ENDPOINT_ENV] ?? loadBrokerSession(cwd)?.endpoint ?? null;
   let client = null;
   try {
-    client = brokerEndpoint
-      ? await CodexAppServerClient.connect(cwd, { brokerEndpoint })
-      : await CodexAppServerClient.connect(cwd, { disableBroker: true });
+    client = await CodexAppServerClient.connect(cwd, { reuseExistingBroker: true });
     await client.request("turn/interrupt", { threadId, turnId });
     return {
       attempted: true,
