@@ -65,6 +65,77 @@ test("setup is ready without npm when Codex is already installed and authenticat
   assert.equal(payload.auth.loggedIn, true);
 });
 
+test("setup trusts app-server API key auth even when login status alone would fail", () => {
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "api-key-account-only");
+
+  const result = run("node", [SCRIPT, "setup", "--json"], {
+    cwd: ROOT,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ready, true);
+  assert.equal(payload.auth.loggedIn, true);
+  assert.equal(payload.auth.authMethod, "apiKey");
+  assert.equal(payload.auth.source, "app-server");
+  assert.match(payload.auth.detail, /API key configured \(unverified\)/);
+});
+
+test("setup is ready when the active provider does not require OpenAI login", () => {
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "provider-no-auth");
+
+  const result = run("node", [SCRIPT, "setup", "--json"], {
+    cwd: ROOT,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ready, true);
+  assert.equal(payload.auth.loggedIn, true);
+  assert.equal(payload.auth.authMethod, null);
+  assert.equal(payload.auth.source, "app-server");
+  assert.match(payload.auth.detail, /configured and does not require OpenAI authentication/i);
+});
+
+test("setup treats custom providers with app-server-ready config as ready", () => {
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "env-key-provider");
+
+  const result = run("node", [SCRIPT, "setup", "--json"], {
+    cwd: ROOT,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ready, true);
+  assert.equal(payload.auth.loggedIn, true);
+  assert.equal(payload.auth.authMethod, null);
+  assert.equal(payload.auth.source, "app-server");
+  assert.match(payload.auth.detail, /configured and does not require OpenAI authentication/i);
+});
+
+test("setup reports not ready when app-server config read fails", () => {
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "config-read-fails");
+
+  const result = run("node", [SCRIPT, "setup", "--json"], {
+    cwd: ROOT,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ready, false);
+  assert.equal(payload.auth.loggedIn, false);
+  assert.equal(payload.auth.source, "app-server");
+  assert.match(payload.auth.detail, /config\/read failed for cwd/);
+});
+
 test("review renders a no-findings result from app-server review/start", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
@@ -84,6 +155,60 @@ test("review renders a no-findings result from app-server review/start", () => {
   assert.equal(result.status, 0);
   assert.match(result.stdout, /Reviewed uncommitted changes/);
   assert.match(result.stdout, /No material issues found/);
+});
+
+test("task runs when the active provider does not require OpenAI login", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "provider-no-auth");
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const result = run("node", [SCRIPT, "task", "check auth preflight"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Handled the requested task/);
+});
+
+test("task runs without auth preflight so Codex can refresh an expired session", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "refreshable-auth");
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const result = run("node", [SCRIPT, "task", "check refreshable auth"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Handled the requested task/);
+});
+
+test("task reports the actual Codex auth error when the run is rejected", () => {
+  const repo = makeTempDir();
+  const binDir = makeTempDir();
+  installFakeCodex(binDir, "auth-run-fails");
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
+  run("git", ["add", "README.md"], { cwd: repo });
+  run("git", ["commit", "-m", "init"], { cwd: repo });
+
+  const result = run("node", [SCRIPT, "task", "check failed auth"], {
+    cwd: repo,
+    env: buildEnv(binDir)
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /authentication expired; run codex login/);
 });
 
 test("review accepts the quoted raw argument style for built-in base-branch review", () => {
@@ -1598,10 +1723,10 @@ test("stop hook does not block when Codex is unavailable even if the review gate
   assert.match(allowed.stderr, /Run \/codex:setup/i);
 });
 
-test("stop hook does not block when Codex is not authenticated even if the review gate is enabled", () => {
+test("stop hook runs the actual task when auth status looks stale", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
-  installFakeCodex(binDir, "logged-out");
+  installFakeCodex(binDir, "refreshable-auth");
   initGitRepo(repo);
   fs.writeFileSync(path.join(repo, "README.md"), "hello\n");
   run("git", ["add", "README.md"], { cwd: repo });
@@ -1620,10 +1745,10 @@ test("stop hook does not block when Codex is not authenticated even if the revie
   });
 
   assert.equal(allowed.status, 0, allowed.stderr);
-  assert.equal(allowed.stdout.trim(), "");
-  assert.match(allowed.stderr, /Codex is not set up for the review gate/i);
-  assert.match(allowed.stderr, /not authenticated/i);
-  assert.match(allowed.stderr, /!codex login/i);
+  assert.doesNotMatch(allowed.stderr, /Codex is not set up for the review gate/i);
+  const payload = JSON.parse(allowed.stdout);
+  assert.equal(payload.decision, "block");
+  assert.match(payload.reason, /Missing empty-state guard/i);
 });
 
 test("commands lazily start and reuse one shared app-server after first use", async () => {
