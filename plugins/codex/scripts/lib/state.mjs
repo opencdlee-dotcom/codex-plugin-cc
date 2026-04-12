@@ -127,6 +127,9 @@ export function generateJobId(prefix = "job") {
 }
 
 export function upsertJob(cwd, jobPatch) {
+  if (!jobPatch.id) {
+    throw new Error("upsertJob: id is required");
+  }
   return updateState(cwd, (state) => {
     const timestamp = nowIso();
     const existingIndex = state.jobs.findIndex((job) => job.id === jobPatch.id);
